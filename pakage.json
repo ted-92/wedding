@@ -1,0 +1,919 @@
+/**
+ * 1. 최초 1회 실행용: 시트 구조 및 샘플 승인코드 자동 생성 함수
+ * 상단에서 'setupSheets'를 선택하고 [실행] 버튼을 한 번 눌러주세요!
+ */
+function setupSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1) 예식 및 승인코드 관리 시트 (Weddings)
+  let weddingSheet = ss.getSheetByName("Weddings");
+  if (!weddingSheet) {
+    weddingSheet = ss.insertSheet("Weddings");
+    weddingSheet.appendRow([
+      "승인코드(Hall_ID)", "사용상태", "비밀번호(신랑신부용)", "신랑이름", "신부이름", 
+      "청첩장URL", "구글드라이브폴더URL(또는ID)", "계좌목록(JSON)", "등록일시"
+    ]);
+    // 관리자가 미리 발급해 둔 샘플 승인코드 2개
+    weddingSheet.appendRow(["WED-2026", "ACTIVE", "1234", "김신랑", "이신부", "https://example.com", "", "[]", new Date()]);
+    weddingSheet.appendRow(["VIP-7777", "ISSUED", "", "", "", "", "", "[]", ""]);
+  }
+
+  // 2) 예식별 하객 아바타/말풍선 저장 시트 (Guests)
+  let guestSheet = ss.getSheetByName("Guests");
+  if (!guestSheet) {
+    guestSheet = ss.insertSheet("Guests");
+    guestSheet.appendRow(["승인코드(Hall_ID)", "하객이름", "아바타", "축하말풍선", "입장시간"]);
+  }
+}
+
+/**
+ * 2. 웹사이트 GET 요청 처리 (특정 예식장 정보 + 해당 예식 하객 목록 불러오기)
+ */
+function doGet(e) {
+  const hallCode = (e.parameter.hall || "").trim().toUpperCase();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const weddingSheet = ss.getSheetByName("Weddings");
+  const guestSheet = ss.getSheetByName("Guests");
+
+  const data = weddingSheet.getDataRange().getValues();
+  let hallInfo = null;
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]).toUpperCase() === hallCode) {
+      hallInfo = {
+        hallCode: data[i][0],
+        status: data[i][1], // ISSUED(발급됨/미설정), ACTIVE(개설완료), BLOCKED(차단)
+        groomName: data[i][3],
+        brideName: data[i][4],
+        invitationUrl: data[i][5],
+        driveFolder: data[i][6],
+        accounts: JSON.parse(data[i][7] || "[]")
+      };
+      break;
+    }
+  }
+
+  if (!hallInfo || hallInfo.status === "BLOCKED") {
+    return jsonResponse({ status: "error", message: "유효하지 않거나 만료된 예식장 코드입니다." });
+  }
+
+  // 해당 예식장(hallCode)의 하객 아바타 목록만 필터링 (최근 40명)
+  const guestRows = guestSheet.getDataRange().getValues();
+  const guests = [];
+  for (let i = guestRows.length - 1; i >= 1 && guests.length < 40; i--) {
+    if (String(guestRows[i][0]).toUpperCase() === hallCode) {
+      guests.push({
+        name: guestRows[i][1],
+        avatar: guestRows[i][2],
+        message: guestRows[i][3]
+      });
+    }
+  }
+
+  return jsonResponse({ status: "success", hall: hallInfo, guests: guests });
+}
+
+/**
+ * 3. 웹사이트 POST 요청 처리 (신랑신부 식장 세팅, 하객 입장, 사진 업로드)
+ */
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const weddingSheet = ss.getSheetByName("Weddings");
+    const guestSheet = ss.getSheetByName("Guests");
+    const hallCode = (body.hallCode || "").trim().toUpperCase();
+
+    // [기능 A] 신랑·신부가 관리자 승인코드로 식장 정보 등록/수정
+    if (body.action === "saveWeddingConfig") {
+      const rows = weddingSheet.getDataRange().getValues();
+      for (let i = 1; i < rows.length; i++) {
+        if (String(rows[i][0]).toUpperCase() === hallCode) {
+          const savedStatus = rows[i][1];
+          const savedPin = String(rows[i][2]);
+
+          if (savedStatus === "BLOCKED") {
+            return jsonResponse({ status: "error", message: "관리자에 의해 사용 중지된 코드입니다." });
+          }
+          // 이미 비밀번호가 설정되어 있다면 비밀번호 일치 여부 확인
+          if (savedPin && savedPin !== String(body.pin)) {
+            return jsonResponse({ status: "error", message: "설정한 비밀번호가 일치하지 않습니다." });
+          }
+
+          // 정보 업데이트
+          weddingSheet.getRange(i + 1, 2, 1, 8).setValues([[
+            "ACTIVE",
+            String(body.pin),
+            body.groomName,
+            body.brideName,
+            body.invitationUrl,
+            body.driveFolder,
+            JSON.stringify(body.accounts || []),
+            new Date()
+          ]]);
+
+          return jsonResponse({ status: "success", message: "식장 설정이 저장되었습니다!" });
+        }
+      }
+      return jsonResponse({ status: "error", message: "관리자에게 발급받은 승인코드가 아닙니다." });
+    }
+
+    // [기능 B] 하객 입장 및 축하 말풍선 등록 (예식장별로 분리 저장)
+    if (body.action === "joinGuest") {
+      guestSheet.appendRow([hallCode, body.name, body.avatar, body.message, new Date()]);
+      return jsonResponse({ status: "success" });
+    }
+
+    // [기능 C] 해당 예식장의 구글 드라이브 폴더로 사진 업로드
+    if (body.action === "uploadPhoto") {
+      const folderId = extractFolderId(body.driveFolder);
+      if (!folderId) {
+        return jsonResponse({ status: "error", message: "드라이브 폴더 ID가 올바르지 않습니다." });
+      }
+      const folder = DriveApp.getFolderById(folderId);
+      const decoded = Utilities.base64Decode(body.base64Data);
+      const blob = Utilities.newBlob(decoded, body.mimeType, body.fileName);
+      const file = folder.createFile(blob);
+      file.setDescription(`[${hallCode}] 업로드 하객: ${body.guestName}`);
+
+      return jsonResponse({ status: "success" });
+    }
+
+    return jsonResponse({ status: "error", message: "알 수 없는 요청입니다." });
+  } catch (err) {
+    return jsonResponse({ status: "error", message: err.toString() });
+  }
+}
+
+// 구글 드라이브 URL에서 폴더 ID만 자동 추출하는 헬퍼 함수
+function extractFolderId(urlOrId) {
+  if (!urlOrId) return "";
+  const match = urlOrId.match(/[-\w]{25,}/);
+  return match ? match[0] : urlOrId.trim();
+}
+
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+[배포] -> [새 배포] -> 유형: [웹 앱] (실행 주체: 나, 액세스 권한: 모든 사용자)로 배포한 뒤 생성된 웹 앱 URL을 복사합니다.
+이제 관리자님은 스프레드시트의 Weddings 탭 A열에 새 코드(예: LOVE-0520)를 한 줄씩 적어주기만 하면 새 신랑·신부에게 이용 권한을 부여할 수 있습니다!
+💻 3단계: 멀티 예식 & 승인코드 인증이 적용된 웹사이트 (index.html)
+아래 코드는 백엔드(Apps Script) 연결 전에도 내 컴퓨터에서 바로 테스트할 수 있도록 테스트 승인코드(WED-2026, VIP-7777)가 내장되어 있습니다.
+저장 후 브라우저로 열면 **[하객 입장]**과 [신랑·신부 승인코드로 식장 개설] 기능을 즉시 체험해 보실 수 있습니다.
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>사이버 웨딩홀 플랫폼</title>
+  <style>
+    :root {
+      --primary: #ff758f;
+      --primary-dark: #e64980;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body, html {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden; background-color: #1a1a2e;
+    }
+
+    #game-container {
+      position: relative; width: 100vw; height: 100vh;
+      overflow: hidden; display: flex; justify-content: center; align-items: center;
+      background: radial-gradient(circle, #3a3d5c 0%, #1a1a2e 100%);
+    }
+
+    /* 식장 맵 */
+    #wedding-hall {
+      position: relative; width: 100%; max-width: 500px; height: 100%; max-height: 820px;
+      background-color: #fdfbf7;
+      background-image: radial-gradient(#e8dfd5 1px, transparent 1px), radial-gradient(#e8dfd5 1px, #fdfbf7 1px);
+      background-size: 32px 32px; background-position: 0 0, 16px 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6); overflow: hidden; cursor: pointer;
+    }
+
+    .stage {
+      position: absolute; top: 0; left: 0; width: 100%; height: 210px;
+      background: linear-gradient(180deg, #fff0f3 0%, #fde2e4 100%);
+      border-bottom: 6px solid #e2b4bd; display: flex; justify-content: center;
+    }
+
+    .wedding-arch {
+      margin-top: 15px; width: 200px; height: 130px;
+      border: 8px solid #ffb3c6; border-bottom: none; border-radius: 100px 100px 0 0;
+      background: rgba(255, 255, 255, 0.75); display: flex; flex-direction: column;
+      align-items: center; padding-top: 10px;
+    }
+
+    .arch-banner {
+      font-size: 12px; font-weight: 800; color: #c9184a; background: #fff;
+      padding: 3px 10px; border-radius: 20px; border: 1.5px solid #ffb3c6;
+    }
+
+    .virgin-road {
+      position: absolute; top: 210px; left: 50%; transform: translateX(-50%);
+      width: 110px; height: calc(100% - 210px);
+      background: linear-gradient(180deg, #ff758f 0%, #c9184a 100%);
+      border-left: 5px solid #ffd166; border-right: 5px solid #ffd166;
+    }
+
+    .guest-table {
+      position: absolute; width: 70px; height: 70px; background: #fff;
+      border: 4px solid #e9ecef; border-radius: 50%;
+      display: flex; justify-content: center; align-items: center; font-size: 20px; pointer-events: none;
+    }
+
+    .top-hud {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      width: 92%; max-width: 460px; background: rgba(255, 255, 255, 0.94);
+      padding: 8px 14px; border-radius: 30px; display: flex; justify-content: space-between;
+      align-items: center; font-size: 13px; font-weight: 800; color: #333;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15); z-index: 100;
+    }
+
+    .hud-btn {
+      background: #2b2d42; color: #fff; border: none; border-radius: 14px;
+      padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;
+    }
+
+    /* 캐릭터 및 NPC */
+    .character {
+      position: absolute; transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center;
+      transition: left 0.25s linear, top 0.25s linear; z-index: 20;
+    }
+
+    .speech-bubble {
+      background: #fff; color: #222; padding: 5px 10px; border-radius: 14px;
+      font-size: 12px; font-weight: 600; white-space: nowrap; max-width: 185px;
+      overflow: hidden; text-overflow: ellipsis; box-shadow: 0 3px 8px rgba(0,0,0,0.18);
+      border: 1.5px solid #ffd6e0; margin-bottom: 5px; position: relative;
+      animation: floatBubble 2.2s ease-in-out infinite;
+    }
+
+    .npc .speech-bubble {
+      background: #2b2d42; color: #fff; border: 2px solid #ffd166; font-weight: 700; cursor: pointer;
+    }
+
+    .avatar-sprite {
+      width: 52px; height: 52px; border-radius: 50%; background: #fff;
+      border: 3px solid #fff; box-shadow: 0 5px 12px rgba(0,0,0,0.22);
+      display: flex; justify-content: center; align-items: center; font-size: 30px;
+    }
+
+    .npc .avatar-sprite {
+      width: 62px; height: 62px; font-size: 34px; border: 3px solid #ffd166;
+      background: linear-gradient(135deg, #fff9db 0%, #fff 100%); cursor: pointer;
+      animation: pulseNpc 1.8s infinite;
+    }
+
+    .player .avatar-sprite {
+      border-color: #ff4d6d; box-shadow: 0 0 0 4px rgba(255, 77, 109, 0.3);
+    }
+
+    .name-tag {
+      margin-top: 4px; background: rgba(0, 0, 0, 0.72); color: #fff;
+      font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+    }
+
+    .npc .name-tag { background: #c9184a; border: 1px solid #ffd166; font-weight: 800; }
+
+    /* 하단 컨트롤 바 */
+    .bottom-dock {
+      position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+      width: 94%; max-width: 470px; background: rgba(255, 255, 255, 0.95);
+      padding: 10px; border-radius: 20px; box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+      z-index: 100; display: flex; flex-direction: column; gap: 8px;
+    }
+
+    .chat-bar { display: flex; gap: 6px; }
+    .chat-bar input {
+      flex: 1; padding: 8px 12px; border: 1.5px solid #dee2e6; border-radius: 12px; font-size: 13px;
+    }
+    .chat-bar button {
+      background: var(--primary); color: #fff; border: none; border-radius: 12px;
+      padding: 0 14px; font-weight: 700; font-size: 13px; cursor: pointer;
+    }
+
+    .quick-npc-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .quick-btn {
+      background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px;
+      padding: 7px 4px; font-size: 12px; font-weight: 700; color: #495057; cursor: pointer;
+    }
+
+    /* 모달 */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px);
+      display: none; justify-content: center; align-items: center; z-index: 500; padding: 16px;
+    }
+    .modal-overlay.active { display: flex; }
+
+    .modal-card {
+      background: #fff; width: 100%; max-width: 410px; border-radius: 24px;
+      padding: 22px 18px; box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+      max-height: 90vh; overflow-y: auto; text-align: center;
+    }
+
+    .modal-title { font-size: 19px; font-weight: 800; margin: 0 0 6px; color: #222; }
+    .modal-sub { font-size: 13px; color: #666; margin-bottom: 14px; line-height: 1.45; }
+
+    .input-field {
+      width: 100%; padding: 11px 13px; margin-bottom: 8px;
+      border: 1.5px solid #dee2e6; border-radius: 12px; font-size: 13px;
+    }
+
+    .primary-btn {
+      width: 100%; padding: 13px; background: linear-gradient(135deg, #ff758f 0%, #e64980 100%);
+      color: #fff; border: none; border-radius: 14px; font-size: 14px; font-weight: 800;
+      cursor: pointer; margin-top: 4px;
+    }
+
+    .secondary-btn {
+      width: 100%; padding: 11px; background: #2b2d42; color: #fff;
+      border: none; border-radius: 12px; font-size: 13px; font-weight: 700;
+      cursor: pointer; margin-top: 8px;
+    }
+
+    .close-btn {
+      margin-top: 8px; width: 100%; padding: 10px; background: #f1f3f5;
+      color: #495057; border: none; border-radius: 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+    }
+
+    .avatar-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px;
+    }
+    .avatar-option {
+      font-size: 26px; padding: 8px 0; border: 2px solid #e9ecef; border-radius: 14px;
+      cursor: pointer; background: #f8f9fa;
+    }
+    .avatar-option.selected { border-color: var(--primary); background: #fff0f3; }
+
+    .account-box {
+      background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 12px;
+      padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between;
+      align-items: center; text-align: left;
+    }
+
+    .copy-btn {
+      background: #2b2d42; color: #fff; border: none; border-radius: 8px;
+      padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+
+    .badge-code {
+      display: inline-block; background: #fff0f3; color: #c9184a;
+      border: 1px solid #ffb3c6; padding: 3px 10px; border-radius: 20px;
+      font-size: 12px; font-weight: 800; margin-bottom: 10px;
+    }
+
+    @keyframes floatBubble { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+    @keyframes pulseNpc { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 209, 102, 0.7); } 50% { box-shadow: 0 0 0 8px rgba(255, 209, 102, 0); } }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <!-- 상단 예식장 이름 & 로비/관리 버튼 -->
+  <div class="top-hud">
+    <span id="hud-hall-title">💒 사이버 웨딩홀</span>
+    <button class="hud-btn" onclick="openModal('coupleAdminModal')">🤵👰 신랑·신부 설정</button>
+  </div>
+
+  <!-- 결혼식장 맵 -->
+  <div id="wedding-hall">
+    <div class="stage">
+      <div class="wedding-arch">
+        <span class="arch-banner" id="arch-couple-names">HAPPY WEDDING</span>
+      </div>
+    </div>
+
+    <div class="virgin-road"></div>
+
+    <div class="guest-table" style="left: 16%; top: 38%;">💐</div>
+    <div class="guest-table" style="left: 16%; top: 58%;">🥂</div>
+    <div class="guest-table" style="left: 70%; top: 38%;">💐</div>
+    <div class="guest-table" style="left: 70%; top: 58%;">🍰</div>
+
+    <!-- 1. 신랑 & 신부 NPC -->
+    <div class="character npc" style="left: 50%; top: 18%;" onclick="openModal('invitationModal', event)">
+      <div class="speech-bubble">💌 모바일 청첩장 보기</div>
+      <div class="avatar-sprite">🤵👰</div>
+      <div class="name-tag" id="npc-couple-tag">신랑 & 신부</div>
+    </div>
+
+    <!-- 2. 사회자 NPC -->
+    <div class="character npc" style="left: 20%; top: 24%;" onclick="openModal('accountModal', event)">
+      <div class="speech-bubble">🎤 마음 전하실 곳 (축의금)</div>
+      <div class="avatar-sprite">🎙️</div>
+      <div class="name-tag">사회자 NPC</div>
+    </div>
+
+    <!-- 3. 사진기사 NPC -->
+    <div class="character npc" style="left: 80%; top: 24%;" onclick="openModal('photoModal', event)">
+      <div class="speech-bubble">📸 찍은 스냅사진 올리기!</div>
+      <div class="avatar-sprite">📷</div>
+      <div class="name-tag">사진기사 NPC</div>
+    </div>
+
+    <div id="characters-layer"></div>
+  </div>
+
+  <!-- 하단 컨트롤러 -->
+  <div class="bottom-dock">
+    <div class="chat-bar">
+      <input type="text" id="live-msg-input" maxlength="28" placeholder="내 머리 위 축하 말풍선 바꾸기..." />
+      <button onclick="updateMyBubble()">변경</button>
+    </div>
+    <div class="quick-npc-btns">
+      <button class="quick-btn" onclick="walkToNpcAndOpen(50, 28, 'invitationModal')">🤵👰 청첩장</button>
+      <button class="quick-btn" onclick="walkToNpcAndOpen(20, 34, 'accountModal')">🎤 축의금 계좌</button>
+      <button class="quick-btn" onclick="walkToNpcAndOpen(80, 34, 'photoModal')">📸 사진 업로드</button>
+    </div>
+  </div>
+</div>
+
+<!-- [모달 0] 식장 코드 확인 & 하객 아바타 입장 모달 -->
+<div class="modal-overlay active" id="entryModal">
+  <div class="modal-card">
+    <div class="badge-code" id="entry-hall-badge">예식장 코드 확인 중...</div>
+    <h2 class="modal-title" id="entry-hall-title">🎉 사이버 결혼식장 입장</h2>
+    <p class="modal-sub">참석하실 예식장 코드와 아바타, 축하 말풍선을 입력해 주세요!</p>
+
+    <!-- URL에 ?hall=코드가 있으면 자동 입력됨 -->
+    <div style="display:flex; gap:6px; margin-bottom:10px;">
+      <input type="text" id="hallCodeInput" class="input-field" style="margin-bottom:0; font-weight:800; text-transform:uppercase;" placeholder="예식장 코드 (예: WED-2026)" />
+      <button class="copy-btn" style="white-space:nowrap; padding:0 14px;" onclick="loadWeddingHallData()">식장 불러오기</button>
+    </div>
+
+    <div class="avatar-grid" id="avatarSelector">
+      <div class="avatar-option selected" data-avatar="🐶">🐶</div>
+      <div class="avatar-option" data-avatar="🐱">🐱</div>
+      <div class="avatar-option" data-avatar="🐰">🐰</div>
+      <div class="avatar-option" data-avatar="🐻">🐻</div>
+      <div class="avatar-option" data-avatar="🦊">🦊</div>
+      <div class="avatar-option" data-avatar="🐼">🐼</div>
+      <div class="avatar-option" data-avatar="🐥">🐥</div>
+      <div class="avatar-option" data-avatar="🦄">🦄</div>
+    </div>
+
+    <input type="text" id="guestName" class="input-field" maxlength="10" placeholder="하객 성함 또는 닉네임 (예: 대학동기 민수)" />
+    <input type="text" id="guestMessage" class="input-field" maxlength="28" placeholder="축하 말풍선 (예: 결혼 진심으로 축하해!!)" />
+    <button class="primary-btn" onclick="enterWeddingHall()">이 아바타로 식장 입장하기 🚪</button>
+    <button class="secondary-btn" onclick="openModal('coupleAdminModal')">🤵👰 신랑·신부 식장 개설 / 설정하기 (승인코드 필요)</button>
+  </div>
+</div>
+
+<!-- [모달 A] 신랑·신부 전용 식장 개설/설정 모달 (관리자 승인코드 검증) -->
+<div class="modal-overlay" id="coupleAdminModal">
+  <div class="modal-card">
+    <h2 class="modal-title">🔐 신랑·신부 식장 개설 & 관리</h2>
+    <p class="modal-sub">관리자에게 발급받은 <strong>승인 코드</strong>가 있어야<br>나만의 사이버 결혼식장을 개설할 수 있습니다.</p>
+
+    <input type="text" id="adminLicenseCode" class="input-field" style="text-transform:uppercase; font-weight:700;" placeholder="관리자 발급 승인코드 (테스트: WED-2026 또는 VIP-7777)" />
+    <input type="password" id="couplePin" class="input-field" placeholder="수정용 비밀번호 설정 (예: 1234)" />
+
+    <hr style="border:none; border-top:1px solid #eee; margin: 12px 0;" />
+
+    <div style="display:flex; gap:6px;">
+      <input type="text" id="cfgGroom" class="input-field" placeholder="신랑 이름 (예: 김신랑)" />
+      <input type="text" id="cfgBride" class="input-field" placeholder="신부 이름 (예: 이신부)" />
+    </div>
+    <input type="url" id="cfgInvitationUrl" class="input-field" placeholder="모바일 청첩장 링크 (https://...)" />
+    <input type="text" id="cfgDriveFolder" class="input-field" placeholder="스냅 사진 받을 구글 드라이브 공유폴더 링크" />
+
+    <div style="text-align:left; font-size:12px; font-weight:700; color:#495057; margin: 6px 0 4px;">💳 축의금 계좌번호 입력</div>
+    <input type="text" id="cfgAcc1" class="input-field" placeholder="신랑측 (예: 신랑 김신랑 / 카카오뱅크 3333-01-12345)" />
+    <input type="text" id="cfgAcc2" class="input-field" placeholder="신부측 (예: 신부 이신부 / 토스뱅크 1000-12-34567)" />
+
+    <button class="primary-btn" onclick="saveCoupleWeddingConfig()">✨ 승인코드 인증 및 식장 개설하기</button>
+
+    <!-- 개설 성공 시 전용 링크 및 QR코드 표시 영역 -->
+    <div id="shareResultBox" style="display:none; margin-top:14px; padding:12px; background:#f8f9fa; border-radius:14px; border:1px solid #dee2e6;">
+      <div style="font-size:13px; font-weight:800; color:#c9184a; margin-bottom:6px;">🎉 전용 사이버 식장이 생성되었습니다!</div>
+      <img id="qrCodeImg" src="" alt="QR Code" style="width:140px; height:140px; border-radius:10px; border:1px solid #ddd; margin-bottom:8px;" />
+      <input type="text" id="generatedShareUrl" class="input-field" readonly style="font-size:11px; text-align:center;" />
+      <button class="copy-btn" style="width:100%; padding:9px;" onclick="copyShareUrl()">하객 초대 링크 복사하기</button>
+    </div>
+
+    <button class="close-btn" onclick="closeModal('coupleAdminModal')">닫기</button>
+  </div>
+</div>
+
+<!-- [모달 1] 신랑신부 NPC - 모바일 청첩장 -->
+<div class="modal-overlay" id="invitationModal">
+  <div class="modal-card">
+    <h2 class="modal-title" id="modal-couple-title">🤵👰 신랑 & 신부</h2>
+    <p class="modal-sub">"저희 결혼식에 와주셔서 진심으로 감사합니다!<br>아래 버튼을 눌러 모바일 청첩장을 확인해 보세요."</p>
+    <button class="primary-btn" onclick="goToInvitation()">💌 모바일 청첩장 열기</button>
+    <button class="close-btn" onclick="closeModal('invitationModal')">돌아가기</button>
+  </div>
+</div>
+
+<!-- [모달 2] 사회자 NPC - 계좌번호 -->
+<div class="modal-overlay" id="accountModal">
+  <div class="modal-card">
+    <h2 class="modal-title">🎙️ 사회자 축의금 안내</h2>
+    <p class="modal-sub">"축하의 마음을 전하실 곳을 안내해 드립니다."</p>
+    <div id="accountListContainer"></div>
+    <button class="close-btn" onclick="closeModal('accountModal')">닫기</button>
+  </div>
+</div>
+
+<!-- [모달 3] 사진기사 NPC - 구글 드라이브 스냅 업로드 -->
+<div class="modal-overlay" id="photoModal">
+  <div class="modal-card">
+    <h2 class="modal-title">📸 사진기사 NPC</h2>
+    <p class="modal-sub">"찍으신 스냅사진을 올려주시면<br>현재 예식의 신랑·신부 구글 드라이브로 전송됩니다!"</p>
+
+    <div style="border:2px dashed #ffb3c6; background:#fff0f3; border-radius:16px; padding:18px; margin-bottom:10px; cursor:pointer;" onclick="document.getElementById('snapFileInput').click()">
+      <div style="font-size:28px;">📤</div>
+      <strong style="font-size:13px; color:#c9184a;">여기를 눌러 사진/영상 선택 (여러 장 가능)</strong>
+      <input type="file" id="snapFileInput" multiple accept="image/*,video/*" style="display:none" onchange="handleFileSelect(event)" />
+    </div>
+
+    <div id="upload-status" style="font-size:12px; font-weight:700; color:#e64980; margin-bottom:8px;"></div>
+    <button class="primary-btn" id="directUploadBtn" onclick="uploadFilesToDrive()">🚀 신랑·신부 드라이브로 바로 전송</button>
+    <button class="secondary-btn" style="background:#4285F4;" onclick="openSharedGoogleDrive()">📁 구글 드라이브 공유폴더 직접 열기</button>
+    <button class="close-btn" onclick="closeModal('photoModal')">닫기</button>
+  </div>
+</div>
+
+<script>
+  /********************************************************************
+   * 🔧 [관리자 설정] 2단계에서 배포한 Google Apps Script 웹앱 URL을 넣으세요.
+   * 비워두면 내 컴퓨터에서 바로 테스트 가능한 '로컬 데모 모드'로 작동합니다!
+   ********************************************************************/
+  const GAS_WEB_APP_URL = ""; 
+
+  // 로컬 테스트용 기본 승인 코드 DB (Apps Script 연결 전에도 테스트 가능)
+  const LOCAL_DEMO_DB = {
+    "WED-2026": {
+      hallCode: "WED-2026",
+      status: "ACTIVE",
+      pin: "1234",
+      groomName: "김신랑",
+      brideName: "이신부",
+      invitationUrl: "https://example.com/wedding-2026",
+      driveFolder: "https://drive.google.com/",
+      accounts: [
+        { label: "신랑측", info: "카카오뱅크 3333-01-2345678 (김신랑)" },
+        { label: "신부측", info: "토스뱅크 1000-12-3456789 (이신부)" }
+      ],
+      guests: [
+        { name: "대학동기 지훈", avatar: "🐻", message: "김신랑 이신부 결혼 축하한다!!", x: 28, y: 48 },
+        { name: "신부친구 수진", avatar: "🐰", message: "오늘 신부 세상에서 제일 예뻐 💖", x: 70, y: 52 }
+      ]
+    },
+    "VIP-7777": {
+      hallCode: "VIP-7777",
+      status: "ISSUED", // 관리자가 코드만 발급하고 아직 신랑신부가 세팅 전인 상태
+      pin: "",
+      groomName: "박신랑",
+      brideName: "최신부",
+      invitationUrl: "https://example.com/vip-7777",
+      driveFolder: "https://drive.google.com/",
+      accounts: [
+        { label: "신랑측", info: "국민은행 123456-04-123456 (박신랑)" }
+      ],
+      guests: [
+        { name: "사촌동생 유나", avatar: "🐥", message: "VIP-7777 예식장 축하드려요!", x: 35, y: 66 }
+      ]
+    }
+  };
+
+  // 현재 접속 중인 예식장 상태
+  let currentHallCode = "WED-2026";
+  let currentHallConfig = null;
+  let otherGuests = [];
+  let selectedAvatar = "🐶";
+  let myPlayer = { name: "하객", avatar: "🐶", message: "결혼 축하해요! 🎉", x: 50, y: 80 };
+
+  // 1. 페이지 로드 시 URL 파라미터(?hall=코드) 자동 확인
+  window.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    const hallParam = (params.get('hall') || "WED-2026").toUpperCase();
+    document.getElementById('hallCodeInput').value = hallParam;
+    loadWeddingHallData();
+  });
+
+  // 2. 특정 예식장(Hall Code) 데이터 불러오기
+  async function loadWeddingHallData() {
+    const codeInput = document.getElementById('hallCodeInput').value.trim().toUpperCase();
+    if (!codeInput) {
+      alert("예식장 코드를 입력해 주세요!");
+      return;
+    }
+
+    if (GAS_WEB_APP_URL) {
+      try {
+        const res = await fetch(`${GAS_WEB_APP_URL}?hall=${encodeURIComponent(codeInput)}`);
+        const data = await res.json();
+        if (data.status !== "success") {
+          alert(data.message || "존재하지 않는 예식장 코드입니다.");
+          return;
+        }
+        applyHallData(data.hall, data.guests);
+      } catch (e) {
+        alert("서버 연결 중 오류가 발생했습니다.");
+      }
+    } else {
+      // 로컬 테스트 모드
+      const localData = LOCAL_DEMO_DB[codeInput];
+      if (!localData) {
+        alert(`등록되지 않은 코드입니다.\n테스트 코드: WED-2026 또는 VIP-7777 을 입력해 보세요!`);
+        return;
+      }
+      applyHallData(localData, localData.guests);
+    }
+  }
+
+  function applyHallData(hall, guests) {
+    currentHallCode = hall.hallCode;
+    currentHallConfig = hall;
+
+    const coupleTitle = (hall.groomName && hall.brideName)
+      ? `${hall.groomName} ♥ ${hall.brideName}`
+      : `예식장 (${hall.hallCode})`;
+
+    document.getElementById('entry-hall-badge').textContent = `입장 코드: ${hall.hallCode}`;
+    document.getElementById('entry-hall-title').textContent = `💒 ${coupleTitle} 결혼식장`;
+    document.getElementById('hud-hall-title').textContent = `💒 ${coupleTitle}`;
+    document.getElementById('arch-couple-names').textContent = coupleTitle;
+    document.getElementById('npc-couple-tag').textContent = coupleTitle;
+    document.getElementById('modal-couple-title').textContent = `🤵👰 ${coupleTitle}`;
+
+    // 계좌 목록 렌더링
+    const accContainer = document.getElementById('accountListContainer');
+    if (hall.accounts && hall.accounts.length > 0) {
+      accContainer.innerHTML = hall.accounts.map(a => `
+        <div class="account-box">
+          <div>
+            <strong style="font-size:13px; display:block;">[${escapeHtml(a.label)}]</strong>
+            <span style="font-size:13px; color:#495057;">${escapeHtml(a.info)}</span>
+          </div>
+          <button class="copy-btn" onclick="copyText('${escapeHtml(a.info)}')">복사</button>
+        </div>
+      `).join('');
+    } else {
+      accContainer.innerHTML = `<p style="font-size:13px; color:#888;">등록된 계좌 정보가 없습니다.</p>`;
+    }
+
+    // 해당 예식장의 하객 아바타들만 배치
+    otherGuests = (guests || []).map(g => ({
+      name: g.name,
+      avatar: g.avatar,
+      message: g.message,
+      x: g.x || Math.floor(20 + Math.random() * 60),
+      y: g.y || Math.floor(40 + Math.random() * 35)
+    }));
+
+    renderAllCharacters();
+  }
+
+  // 3. 신랑·신부가 관리자 승인코드로 식장 개설/수정하기
+  async function saveCoupleWeddingConfig() {
+    const code = document.getElementById('adminLicenseCode').value.trim().toUpperCase();
+    const pin = document.getElementById('couplePin').value.trim();
+    const groomName = document.getElementById('cfgGroom').value.trim();
+    const brideName = document.getElementById('cfgBride').value.trim();
+    const invitationUrl = document.getElementById('cfgInvitationUrl').value.trim();
+    const driveFolder = document.getElementById('cfgDriveFolder').value.trim();
+    const acc1 = document.getElementById('cfgAcc1').value.trim();
+    const acc2 = document.getElementById('cfgAcc2').value.trim();
+
+    if (!code || !pin || !groomName || !brideName) {
+      alert("승인코드, 비밀번호, 신랑·신부 성함을 모두 입력해 주세요!");
+      return;
+    }
+
+    const accounts = [];
+    if (acc1) accounts.push({ label: "신랑측", info: acc1 });
+    if (acc2) accounts.push({ label: "신부측", info: acc2 });
+
+    if (GAS_WEB_APP_URL) {
+      const res = await fetch(GAS_WEB_APP_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "saveWeddingConfig",
+          hallCode: code,
+          pin, groomName, brideName, invitationUrl, driveFolder, accounts
+        })
+      });
+      const result = await res.json();
+      if (result.status !== "success") {
+        alert("❌ 인증 실패: " + result.message);
+        return;
+      }
+    } else {
+      // 로컬 테스트 모드에서 관리자 승인코드 검증
+      if (!LOCAL_DEMO_DB[code]) {
+        alert("❌ 관리자에게 발급받은 승인코드가 아닙니다!\n(테스트용 승인코드: WED-2026 또는 VIP-7777)");
+        return;
+      }
+      if (LOCAL_DEMO_DB[code].pin && LOCAL_DEMO_DB[code].pin !== pin) {
+        alert("❌ 기존에 설정된 비밀번호(1234)가 일치하지 않습니다.");
+        return;
+      }
+      LOCAL_DEMO_DB[code] = {
+        ...LOCAL_DEMO_DB[code],
+        status: "ACTIVE",
+        pin, groomName, brideName,
+        invitationUrl: invitationUrl || "https://example.com",
+        driveFolder: driveFolder || "https://drive.google.com",
+        accounts
+      };
+    }
+
+    // 전용 초대 링크 및 QR코드 자동 생성
+    const baseUrl = window.location.origin + window.location.pathname;
+    const shareUrl = `${baseUrl}?hall=${encodeURIComponent(code)}`;
+    document.getElementById('generatedShareUrl').value = shareUrl;
+    document.getElementById('qrCodeImg').src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}`;
+    document.getElementById('shareResultBox').style.display = 'block';
+
+    // 현재 화면에도 즉시 반영
+    document.getElementById('hallCodeInput').value = code;
+    loadWeddingHallData();
+  }
+
+  function copyShareUrl() {
+    const url = document.getElementById('generatedShareUrl').value;
+    copyText(url);
+  }
+
+  // 4. 아바타 선택 및 하객 입장
+  document.querySelectorAll('.avatar-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      document.querySelectorAll('.avatar-option').forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+      selectedAvatar = opt.dataset.avatar;
+    });
+  });
+
+  function enterWeddingHall() {
+    if (!currentHallConfig) {
+      alert("유효한 예식장 코드를 먼저 불러와 주세요!");
+      return;
+    }
+    myPlayer.name = document.getElementById('guestName').value.trim() || "익명 하객";
+    myPlayer.avatar = selectedAvatar;
+    myPlayer.message = document.getElementById('guestMessage').value.trim() || "결혼을 진심으로 축하합니다! 🎉";
+
+    document.getElementById('live-msg-input').value = myPlayer.message;
+    closeModal('entryModal');
+    renderAllCharacters();
+
+    if (GAS_WEB_APP_URL) {
+      fetch(GAS_WEB_APP_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "joinGuest",
+          hallCode: currentHallCode,
+          name: myPlayer.name,
+          avatar: myPlayer.avatar,
+          message: myPlayer.message
+        })
+      }).catch(() => {});
+    }
+  }
+
+  function renderAllCharacters() {
+    const layer = document.getElementById('characters-layer');
+    layer.innerHTML = '';
+
+    otherGuests.forEach((g, idx) => {
+      const el = document.createElement('div');
+      el.className = 'character guest';
+      el.id = `guest-${idx}`;
+      el.style.left = g.x + '%';
+      el.style.top = g.y + '%';
+      el.innerHTML = `
+        <div class="speech-bubble">${escapeHtml(g.message)}</div>
+        <div class="avatar-sprite">${g.avatar}</div>
+        <div class="name-tag">${escapeHtml(g.name)}</div>
+      `;
+      layer.appendChild(el);
+    });
+
+    const myEl = document.createElement('div');
+    myEl.className = 'character player';
+    myEl.id = 'my-player';
+    myEl.style.left = myPlayer.x + '%';
+    myEl.style.top = myPlayer.y + '%';
+    myEl.style.zIndex = 35;
+    myEl.innerHTML = `
+      <div class="speech-bubble" id="my-bubble">${escapeHtml(myPlayer.message)}</div>
+      <div class="avatar-sprite">${myPlayer.avatar}</div>
+      <div class="name-tag">⭐ ${escapeHtml(myPlayer.name)} (나)</div>
+    `;
+    layer.appendChild(myEl);
+  }
+
+  // 바닥 클릭 이동
+  const hallEl = document.getElementById('wedding-hall');
+  hallEl.addEventListener('click', (e) => {
+    if (e.target.closest('.npc')) return;
+    const rect = hallEl.getBoundingClientRect();
+    const clickX = Math.max(10, Math.min(90, ((e.clientX - rect.left) / rect.width) * 100));
+    const clickY = Math.max(22, Math.min(84, ((e.clientY - rect.top) / rect.height) * 100));
+    moveMyPlayer(clickX, clickY);
+  });
+
+  function moveMyPlayer(tx, ty) {
+    myPlayer.x = tx; myPlayer.y = ty;
+    const myEl = document.getElementById('my-player');
+    if (myEl) { myEl.style.left = tx + '%'; myEl.style.top = ty + '%'; }
+  }
+
+  function walkToNpcAndOpen(tx, ty, modalId) {
+    moveMyPlayer(tx, ty);
+    setTimeout(() => openModal(modalId), 280);
+  }
+
+  function updateMyBubble() {
+    const val = document.getElementById('live-msg-input').value.trim();
+    if (!val) return;
+    myPlayer.message = val;
+    const bubble = document.getElementById('my-bubble');
+    if (bubble) bubble.textContent = val;
+  }
+
+  // 하객 아바타 자동 산책 애니메이션
+  setInterval(() => {
+    otherGuests.forEach((g, idx) => {
+      if (Math.random() > 0.45) return;
+      g.x = Math.max(14, Math.min(86, g.x + (Math.random() * 12 - 6)));
+      g.y = Math.max(35, Math.min(80, g.y + (Math.random() * 12 - 6)));
+      const el = document.getElementById(`guest-${idx}`);
+      if (el) { el.style.left = g.x + '%'; el.style.top = g.y + '%'; }
+    });
+  }, 2400);
+
+  // NPC 동작 (현재 예식장의 데이터로 연결)
+  function goToInvitation() {
+    if (currentHallConfig && currentHallConfig.invitationUrl) {
+      window.open(currentHallConfig.invitationUrl, '_blank');
+    }
+  }
+
+  function openSharedGoogleDrive() {
+    if (currentHallConfig && currentHallConfig.driveFolder) {
+      window.open(currentHallConfig.driveFolder, '_blank');
+    }
+  }
+
+  let selectedFiles = [];
+  function handleFileSelect(e) {
+    selectedFiles = Array.from(e.target.files);
+    document.getElementById('upload-status').textContent = `${selectedFiles.length}개의 파일이 선택되었습니다.`;
+  }
+
+  async function uploadFilesToDrive() {
+    if (selectedFiles.length === 0) return alert("업로드할 사진을 먼저 선택해 주세요!");
+    if (!GAS_WEB_APP_URL) {
+      alert("Apps Script 연결 전에는 공유 드라이브 폴더로 바로 이동합니다.");
+      return openSharedGoogleDrive();
+    }
+
+    const statusEl = document.getElementById('upload-status');
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      statusEl.textContent = `전송 중... (${i + 1}/${selectedFiles.length})`;
+      const b64 = await new Promise(r => {
+        const reader = new FileReader();
+        reader.onload = () => r(reader.result.split(',')[1]);
+        reader.readAsDataURL(file);
+      });
+
+      await fetch(GAS_WEB_APP_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "uploadPhoto",
+          hallCode: currentHallCode,
+          driveFolder: currentHallConfig.driveFolder,
+          guestName: myPlayer.name,
+          fileName: `[${myPlayer.name}]_${file.name}`,
+          mimeType: file.type,
+          base64Data: b64
+        })
+      });
+    }
+    statusEl.textContent = "✅ 신랑·신부의 구글 드라이브로 업로드 완료!";
+    selectedFiles = [];
+  }
+
+  function openModal(id, e) { if (e) e.stopPropagation(); document.getElementById(id).classList.add('active'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+  function copyText(t) { navigator.clipboard.writeText(t).then(() => alert("복사되었습니다:\n" + t)); }
+  function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+</script>
+</body>
+</html>
