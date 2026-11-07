@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>우리의 작은 결혼식 - 사이버 웨딩홀</title>
+  <!-- html2canvas (방명록 캡처 다운로드용) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style>
+    :root {
+      --primary: #ff5c8d;
+      --primary-dark: #d83a6f;
+      --accent: #ffd166;
+      --bg-color: #fce4ec;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', 'Pretendard', sans-serif;
+    }
+
+    body, html {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden; background-color: var(--bg-color);
+    }
+
+    #game-container {
+      position: relative; width: 100vw; height: 100vh;
+      overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+      background: #fbf8f5;
+    }
+
+    /* 🎀 상단 리본 간판 [신랑 ♥ 신부] */
+    .header-ribbon-wrap {
+      margin-top: 10px;
+      z-index: 100;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .ribbon-banner {
+      position: relative;
+      display: inline-block;
+      background: #ff5c8d;
+      color: #ffffff;
+      font-size: 16px;
+      font-weight: 800;
+      padding: 8px 36px;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+      border-radius: 2px;
+      min-width: 190px;
+    }
+
+    .ribbon-banner::before, .ribbon-banner::after {
+      content: "";
+      position: absolute;
+      top: 6px;
+      border: 15px solid #d83a6f;
+      z-index: -1;
+    }
+    .ribbon-banner::before {
+      left: -22px;
+      border-left-color: transparent;
+    }
+    .ribbon-banner::after {
+      right: -22px;
+      border-right-color: transparent;
+    }
+
+    .admin-icon-btn {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1.5px solid #ff758f;
+      border-radius: 20px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #d83a6f;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      transition: all 0.2s;
+    }
+    .admin-icon-btn:hover {
+      background: #ff758f;
+      color: #fff;
+    }
+
+    /* 💒 결혼식장 메인 맵 영역 */
+    #wedding-hall {
+      position: relative; width: 100%; max-width: 480px; flex: 1; max-height: 760px;
+      background-color: #fdfbf7;
+      background-image: radial-gradient(#e8dfd5 1px, transparent 1px);
+      background-size: 24px 24px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.12); overflow: hidden; cursor: pointer;
+      margin: 8px 0;
+      border-radius: 14px;
+      image-rendering: pixelated;
+    }
+
+    /* 🚪 문 닫힘 오버레이 및 새장(Cloche) 타이포그래피 */
+    #door-overlay {
+      position: absolute; inset: 0; z-index: 300; display: flex;
+      pointer-events: auto;
+    }
+    .door {
+      width: 50%; height: 100%; background: linear-gradient(135deg, #c9184a 0%, #700b29 100%);
+      transition: transform 0.8s cubic-bezier(0.77, 0, 0.175, 1);
+      display: flex; align-items: center; justify-content: center;
+      border: 2px solid #ffb3c6;
+    }
+    .door-left { border-right: 3px solid #ffd166; }
+    .door-right { border-left: 3px solid #ffd166; }
+    
+    #door-overlay.open .door-left { transform: translateX(-100%); }
+    #door-overlay.open .door-right { transform: translateX(100%); }
+
+    .door-content {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 310; text-align: center; color: #fff; width: 100%; max-width: 360px;
+      transition: opacity 0.4s ease;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+
+    /* 🎨 새장(Cloche) 타이포그래피 디자인 */
+    .wedding-card {
+      position: relative;
+      width: 320px;
+      height: 260px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: #ffe3e8;
+      font-weight: 300;
+    }
+
+    .cloche-container {
+      position: absolute;
+      width: 270px;
+      height: 270px;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+
+    .cloche-line {
+      fill: none;
+      stroke: #ffd166;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .text-top {
+      position: absolute;
+      top: 72px;
+      font-size: 17px;
+      letter-spacing: 5px;
+      color: #ffffff;
+      z-index: 2;
+      font-weight: 400;
+    }
+
+    .text-main {
+      position: absolute;
+      top: 135px;
+      font-size: 28px;
+      letter-spacing: 8px;
+      color: #ffffff;
+      z-index: 2;
+      display: flex;
+      gap: 10px;
+      font-weight: 300;
+    }
+
+    .enter-start-btn {
+      background: #ffd166; color: #222; border: none; border-radius: 25px;
+      padding: 13px 28px; font-size: 15px; font-weight: 800; cursor: pointer;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35); margin-top: 15px; z-index: 320;
+      animation: pulse 1.6s infinite;
+    }
+
+    .stage {
+      position: absolute; top: 0; left: 0; width: 100%; height: 190px;
+      background: linear-gradient(180deg, #fff0f3 0%, #fde2e4 100%);
+      border-bottom: 5px solid #e2b4bd; display: flex; justify-content: center;
+    }
+
+    .virgin-road {
+      position: absolute; top: 190px; left: 50%; transform: translateX(-50%);
+      width: 100px; height: calc(100% - 190px);
+      background: linear-gradient(180deg, #ff758f 0%, #c9184a 100%);
+      border-left: 4px solid #ffd166; border-right: 4px solid #ffd166;
+    }
+
+    .chair-row {
+      position: absolute; display: flex; gap: 8px; pointer-events: none;
+    }
+    .chair {
+      width: 22px; height: 22px; background: #fff; border: 2px solid #e2b4bd;
+      border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    /* 캐릭터 및 NPC */
+    .character {
+      position: absolute; transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center;
+      transition: left 0.25s linear, top 0.25s linear; z-index: 20;
+    }
+
+    .speech-bubble {
+      background: #fff; color: #222; padding: 4px 8px; border-radius: 12px;
+      font-size: 11px; font-weight: 600; white-space: nowrap; max-width: 160px;
+      overflow: hidden; text-overflow: ellipsis; box-shadow: 0 3px 8px rgba(0,0,0,0.15);
+      border: 1.5px solid #ffd6e0; margin-bottom: 4px; position: relative;
+    }
+
+    .npc .speech-bubble {
+      background: #2b2d42; color: #fff; border: 2px solid #ffd166; font-weight: 700; cursor: pointer;
+    }
+
+    .avatar-sprite {
+      width: 48px; height: 48px; border-radius: 50%; background: #fff;
+      border: 3px solid #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      display: flex; justify-content: center; align-items: center; font-size: 26px;
+    }
+
+    .npc .avatar-sprite {
+      width: 56px; height: 56px; font-size: 30px; border: 3px solid #ffd166;
+      background: linear-gradient(135deg, #fff9db 0%, #fff 100%); cursor: pointer;
+    }
+
+    .player .avatar-sprite {
+      border-color: #ff4d6d; box-shadow: 0 0 0 4px rgba(255, 77, 109, 0.3);
+    }
+
+    .name-tag {
+      margin-top: 3px; background: rgba(0, 0, 0, 0.7); color: #fff;
+      font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 8px; white-space: nowrap;
+    }
+
+    /* 📱 하단 컨트롤 탭 바 */
+    .bottom-navbar {
+      width: 100%; max-width: 480px; background: #ffffff;
+      padding: 10px 14px; border-top: 1px solid #eee;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+      z-index: 100;
+    }
+
+    .nav-btn {
+      background: #f8f9fa; border: 1.5px solid #e9ecef; border-radius: 14px;
+      padding: 11px 4px; font-size: 13px; font-weight: 700; color: #333;
+      cursor: pointer; text-align: center; display: flex; align-items: center; justify-content: center; gap: 4px;
+      transition: background 0.15s;
+    }
+    .nav-btn:active { background: #ffe3e8; border-color: #ff758f; }
+
+    /* 모달 레이아웃 */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(3px);
+      display: none; justify-content: center; align-items: center; z-index: 500; padding: 16px;
+    }
+    .modal-overlay.active { display: flex; }
+
+    .modal-card {
+      background: #fff; width: 100%; max-width: 410px; border-radius: 20px;
+      padding: 20px 16px; box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+      text-align: center; max-height: 90vh; overflow-y: auto;
+    }
+
+    .modal-title { font-size: 18px; font-weight: 800; margin: 0 0 6px; color: #222; }
+    .modal-sub { font-size: 12px; color: #666; margin-bottom: 12px; line-height: 1.4; }
+
+    .input-field {
+      width: 100%; padding: 10px 12px; margin-bottom: 8px;
+      border: 1.5px solid #dee2e6; border-radius: 10px; font-size: 13px;
+    }
+
+    .primary-btn {
+      width: 100%; padding: 12px; background: linear-gradient(135deg, #ff758f 0%, #e64980 100%);
+      color: #fff; border: none; border-radius: 12px; font-size: 14px; font-weight: 800; cursor: pointer;
+    }
+
+    .secondary-btn {
+      width: 100%; padding: 10px; background: #2b2d42; color: #fff;
+      border: none; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; margin-top: 6px;
+    }
+
+    .close-btn {
+      margin-top: 6px; width: 100%; padding: 9px; background: #f1f3f5;
+      color: #495057; border: none; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+    }
+
+    .avatar-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 12px;
+    }
+    .avatar-option {
+      font-size: 24px; padding: 6px 0; border: 2px solid #e9ecef; border-radius: 12px;
+      cursor: pointer; background: #f8f9fa;
+    }
+    .avatar-option.selected { border-color: var(--primary); background: #fff0f3; }
+
+    .account-box {
+      background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px;
+      padding: 10px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; text-align: left;
+    }
+
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <!-- 🎀 상단 리본 간판 [신랑 ♥ 신부] + 🔑 운영자 관리 창 버튼 -->
+  <div class="header-ribbon-wrap">
+    <div class="ribbon-banner" id="header-couple-title">김신랑 ♥ 이신부</div>
+    <button class="admin-icon-btn" onclick="openModal('adminModal')">🔑 관리자 설정</button>
+  </div>
+
+  <!-- 💒 결혼식장 메인 맵 -->
+  <div id="wedding-hall">
+
+    <!-- 🚪 문 닫힘 오버레이 화면 (우리의 작은 결혼식 타이포그래피) -->
+    <div id="door-overlay">
+      <div class="door door-left"></div>
+      <div class="door door-right"></div>
+      <div class="door-content" id="doorContent">
+        
+        <div class="wedding-card">
+          <div class="text-top">우리의</div>
+          <div class="text-main">
+            <span>작은</span>
+            <span>결혼식</span>
+          </div>
+          <div class="cloche-container">
+            <svg viewBox="0 0 400 400" width="100%" height="100%">
+              <circle cx="200" cy="65" r="10" class="cloche-line" />
+              <path d="M 130 95 C 130 90, 270 90, 270 95 L 285 140 C 290 160, 310 180, 340 180 L 370 180 M 270 95 C 270 180, 330 240, 330 310 L 330 350 L 70 350 L 70 310 C 70 240, 130 180, 130 95 Z" class="cloche-line" />
+              <line x1="55" y1="350" x2="345" y2="350" class="cloche-line" />
+            </svg>
+          </div>
+        </div>
+
+        <button class="enter-start-btn" onclick="openModal('entryModal')">내 캐릭터로 입장하기 🚪</button>
+      </div>
+    </div>
+
+    <div class="stage"></div>
+    <div class="virgin-road"></div>
+
+    <!-- 하객석 의자 픽셀 오브젝트 -->
+    <div class="chair-row" style="left: 12%; top: 40%;">
+      <div class="chair"></div><div class="chair"></div><div class="chair"></div>
+    </div>
+    <div class="chair-row" style="left: 12%; top: 55%;">
+      <div class="chair"></div><div class="chair"></div><div class="chair"></div>
+    </div>
+    <div class="chair-row" style="right: 12%; top: 40%;">
+      <div class="chair"></div><div class="chair"></div><div class="chair"></div>
+    </div>
+    <div class="chair-row" style="right: 12%; top: 55%;">
+      <div class="chair"></div><div class="chair"></div><div class="chair"></div>
+    </div>
+
+    <!-- 1. 신랑 & 신부 NPC (터치 시 -> 모바일 청첩장 링크 오픈) -->
+    <div class="character npc" style="left: 50%; top: 18%;" onclick="goToInvitation(event)">
+      <div class="speech-bubble">💌 청첩장 보기</div>
+      <div class="avatar-sprite">🤵👰</div>
+      <div class="name-tag" id="npc-couple-tag">김신랑 ♥ 이신부</div>
+    </div>
+
+    <!-- 2. 사회자 NPC (터치 시 -> 축의금 계좌 모달) -->
+    <div class="character npc" style="left: 22%; top: 22%;" onclick="openModal('accountModal', event)">
+      <div class="speech-bubble">🎤 축의금 계좌</div>
+      <div class="avatar-sprite">🎙️</div>
+      <div class="name-tag">사회자</div>
+    </div>
+
+    <!-- 3. 촬영기사 NPC (터치 시 -> 공유 구글 드라이브 이동 & 방명록 캡처) -->
+    <div class="character npc" style="left: 78%; top: 22%;" onclick="openModal('photoModal', event)">
+      <div class="speech-bubble">📸 사진 올리기 / 캡처</div>
+      <div class="avatar-sprite">📷</div>
+      <div class="name-tag">촬영기사</div>
+    </div>
+
+    <div id="characters-layer"></div>
+  </div>
+
+  <!-- 📱 하단 3대 메뉴바 -->
+  <div class="bottom-navbar">
+    <button class="nav-btn" onclick="openModal('entryModal')">⚙️ 캐릭터 설정</button>
+    <button class="nav-btn" onclick="openModal('photoModal')">📸 사진 올리기</button>
+    <button class="nav-btn" onclick="openModal('accountModal')">💖 마음 전하기</button>
+  </div>
+</div>
+
+<!-- [모달 1] 하객 아바타/입장 설정 -->
+<div class="modal-overlay" id="entryModal">
+  <div class="modal-card">
+    <h2 class="modal-title">🎉 하객 캐릭터 설정</h2>
+    <p class="modal-sub">아바타와 하객 성함, 축하 메시지를 입력해 주세요.</p>
+
+    <div class="avatar-grid" id="avatarSelector">
+      <div class="avatar-option selected" data-avatar="🐶">🐶</div>
+      <div class="avatar-option" data-avatar="🐱">🐱</div>
+      <div class="avatar-option" data-avatar="🐰">🐰</div>
+      <div class="avatar-option" data-avatar="🐻">🐻</div>
+      <div class="avatar-option" data-avatar="🦊">🦊</div>
+      <div class="avatar-option" data-avatar="🐼">🐼</div>
+      <div class="avatar-option" data-avatar="🐥">🐥</div>
+      <div class="avatar-option" data-avatar="🦄">🦄</div>
+    </div>
+
+    <input type="text" id="guestName" class="input-field" maxlength="10" placeholder="하객 성함 (예: 대학동기 민수)" />
+    <input type="text" id="guestMessage" class="input-field" maxlength="28" placeholder="축하 말풍선 (예: 결혼 진심으로 축하해!)" />
+    <button class="primary-btn" onclick="enterWeddingHall()">식장 입장하기 🚪</button>
+    <button class="close-btn" onclick="closeModal('entryModal')">닫기</button>
+  </div>
+</div>
+
+<!-- [모달 2] 사회자 NPC & 마음 전하기 (계좌번호 안내) -->
+<div class="modal-overlay" id="accountModal">
+  <div class="modal-card">
+    <h2 class="modal-title">💖 마음 전하실 곳 (축의금 계좌)</h2>
+    <p class="modal-sub">신랑·신부에게 축하의 마음을 전해보세요.</p>
+    <div id="accountListContainer"></div>
+    <button class="close-btn" onclick="closeModal('accountModal')">닫기</button>
+  </div>
+</div>
+
+<!-- [모달 3] 촬영기사 NPC & 사진 올리기 -->
+<div class="modal-overlay" id="photoModal">
+  <div class="modal-card">
+    <h2 class="modal-title">📸 스냅사진 공유 & 방명록</h2>
+    <p class="modal-sub">신랑·신부의 공유 구글 드라이브 폴더로 사진을 올려주시거나, 현재 식장 화면을 캡처해 보세요!</p>
+
+    <button class="primary-btn" onclick="openSharedDriveFolder()">📁 공유 구글 드라이브 폴더 열기</button>
+    <button class="secondary-btn" style="background:#ff758f;" onclick="captureAndDownloadGuestbook()">📸 현재 식장 캡처해서 방명록 이미지 저장</button>
+    <button class="close-btn" onclick="closeModal('photoModal')">닫기</button>
+  </div>
+</div>
+
+<!-- 🔑 [모달 4] 운영자 & 신랑·신부 정보 설정 창 (URL 파라미터 생성 방식) -->
+<div class="modal-overlay" id="adminModal">
+  <div class="modal-card">
+    <h2 class="modal-title">⚙️ 식장 정보 설정 (관리자)</h2>
+    <p class="modal-sub">신랑·신부 이름, 청첩장, 드라이브, 계좌를 입력하고 하객 공유용 링크를 생성하세요.</p>
+
+    <div style="display:flex; gap:6px;">
+      <input type="text" id="adminGroom" class="input-field" placeholder="신랑 이름 (예: 김신랑)" value="김신랑" />
+      <input type="text" id="adminBride" class="input-field" placeholder="신부 이름 (예: 이신부)" value="이신부" />
+    </div>
+
+    <input type="url" id="adminInvitationUrl" class="input-field" placeholder="모바일 청첩장 URL (https://...)" value="https://example.com" />
+    <input type="url" id="adminDriveFolder" class="input-field" placeholder="공유 구글 드라이브 폴더 URL (https://drive.google.com/...)" value="https://drive.google.com" />
+
+    <div style="text-align:left; font-size:11px; font-weight:700; color:#495057; margin: 4px 0 2px;">💳 축의금 계좌 설정</div>
+    <input type="text" id="adminAccGroom" class="input-field" placeholder="신랑측 (예: 카카오뱅크 3333-01-123456 김신랑)" value="카카오뱅크 3333-01-123456 (김신랑)" />
+    <input type="text" id="adminAccBride" class="input-field" placeholder="신부측 (예: 토스뱅크 1000-12-345678 이신부)" value="토스뱅크 1000-12-345678 (이신부)" />
+
+    <button class="primary-btn" onclick="saveAndApplySettings()">✨ 설정 저장 및 하객 공유 링크 생성</button>
+
+    <div id="shareResultBox" style="display:none; margin-top:12px; padding:10px; background:#f8f9fa; border-radius:10px; border:1px solid #dee2e6;">
+      <div style="font-size:12px; font-weight:800; color:#c9184a;">🎉 하객 전용 공유 링크가 생성되었습니다!</div>
+      <input type="text" id="generatedShareUrl" class="input-field" readonly style="font-size:11px; text-align:center; margin-top:6px;" />
+      <button class="secondary-btn" onclick="copyShareUrl()">📋 하객 전용 링크 복사하기</button>
+    </div>
+
+    <button class="close-btn" onclick="closeModal('adminModal')">닫기</button>
+  </div>
+</div>
+
+<script>
+  // 기본 식장 정보 객체
+  let weddingConfig = {
+    groom: "김신랑",
+    bride: "이신부",
+    invitation: "https://example.com",
+    drive: "https://drive.google.com",
+    acc1: "카카오뱅크 3333-01-123456 (김신랑)",
+    acc2: "토스뱅크 1000-12-345678 (이신부)"
+  };
+
+  let selectedAvatar = "🐶";
+  let myPlayer = { name: "하객", avatar: "🐶", message: "결혼 축하합니다! 🎉", x: 50, y: 75 };
+
+  // 1. 페이지 로드 시 URL 파라미터(?groom=...&bride=...) 우선 파싱
+  window.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    
+    if (params.has('groom')) weddingConfig.groom = params.get('groom');
+    if (params.has('bride')) weddingConfig.bride = params.get('bride');
+    if (params.has('inv')) weddingConfig.invitation = params.get('inv');
+    if (params.has('drive')) weddingConfig.drive = params.get('drive');
+    if (params.has('acc1')) weddingConfig.acc1 = params.get('acc1');
+    if (params.has('acc2')) weddingConfig.acc2 = params.get('acc2');
+
+    applyConfigToUI();
+  });
+
+  // UI 요소 동적 반영
+  function applyConfigToUI() {
+    const coupleTitle = `${weddingConfig.groom} ♥ ${weddingConfig.bride}`;
+    document.getElementById('header-couple-title').textContent = coupleTitle;
+    document.getElementById('npc-couple-tag').textContent = coupleTitle;
+
+    // 계좌목록 렌더링
+    const accContainer = document.getElementById('accountListContainer');
+    let accHtml = '';
+    if (weddingConfig.acc1) {
+      accHtml += `
+        <div class="account-box">
+          <div>
+            <strong style="font-size:12px; display:block;">[신랑측]</strong>
+            <span style="font-size:12px; color:#495057;">${escapeHtml(weddingConfig.acc1)}</span>
+          </div>
+          <button style="background:#2b2d42; color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer;" onclick="copyText('${escapeHtml(weddingConfig.acc1)}')">복사</button>
+        </div>`;
+    }
+    if (weddingConfig.acc2) {
+      accHtml += `
+        <div class="account-box">
+          <div>
+            <strong style="font-size:12px; display:block;">[신부측]</strong>
+            <span style="font-size:12px; color:#495057;">${escapeHtml(weddingConfig.acc2)}</span>
+          </div>
+          <button style="background:#2b2d42; color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer;" onclick="copyText('${escapeHtml(weddingConfig.acc2)}')">복사</button>
+        </div>`;
+    }
+    accContainer.innerHTML = accHtml || `<p style="font-size:12px; color:#888;">등록된 계좌가 없습니다.</p>`;
+
+    // 관리자 창 필드 값 반영
+    document.getElementById('adminGroom').value = weddingConfig.groom;
+    document.getElementById('adminBride').value = weddingConfig.bride;
+    document.getElementById('adminInvitationUrl').value = weddingConfig.invitation;
+    document.getElementById('adminDriveFolder').value = weddingConfig.drive;
+    document.getElementById('adminAccGroom').value = weddingConfig.acc1;
+    document.getElementById('adminAccBride').value = weddingConfig.acc2;
+  }
+
+  // 2. 🔑 관리자 설정 저장 및 공유 URL 생성
+  function saveAndApplySettings() {
+    weddingConfig.groom = document.getElementById('adminGroom').value.trim() || "신랑";
+    weddingConfig.bride = document.getElementById('adminBride').value.trim() || "신부";
+    weddingConfig.invitation = document.getElementById('adminInvitationUrl').value.trim();
+    weddingConfig.drive = document.getElementById('adminDriveFolder').value.trim();
+    weddingConfig.acc1 = document.getElementById('adminAccGroom').value.trim();
+    weddingConfig.acc2 = document.getElementById('adminAccBride').value.trim();
+
+    applyConfigToUI();
+
+    // URL 파라미터 조합
+    const baseUrl = window.location.origin + window.location.pathname;
+    const urlParams = new URLSearchParams({
+      groom: weddingConfig.groom,
+      bride: weddingConfig.bride,
+      inv: weddingConfig.invitation,
+      drive: weddingConfig.drive,
+      acc1: weddingConfig.acc1,
+      acc2: weddingConfig.acc2
+    });
+
+    const shareUrl = `${baseUrl}?${urlParams.toString()}`;
+    document.getElementById('generatedShareUrl').value = shareUrl;
+    document.getElementById('shareResultBox').style.display = 'block';
+  }
+
+  function copyShareUrl() {
+    copyText(document.getElementById('generatedShareUrl').value);
+  }
+
+  // 3. 아바타 선택 & 식장 입장
+  document.querySelectorAll('.avatar-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      document.querySelectorAll('.avatar-option').forEach(o => o.classList.remove('selected'));
+      opt.classList.add('selected');
+      selectedAvatar = opt.dataset.avatar;
+    });
+  });
+
+  function enterWeddingHall() {
+    myPlayer.name = document.getElementById('guestName').value.trim() || "익명 하객";
+    myPlayer.avatar = selectedAvatar;
+    myPlayer.message = document.getElementById('guestMessage').value.trim() || "결혼 진심으로 축하해요! 🎉";
+
+    closeModal('entryModal');
+    renderMyPlayer();
+
+    const doorOverlay = document.getElementById('door-overlay');
+    const doorContent = document.getElementById('doorContent');
+    
+    doorContent.style.opacity = '0';
+    doorOverlay.classList.add('open');
+    setTimeout(() => {
+      doorOverlay.style.display = 'none';
+    }, 800);
+  }
+
+  function renderMyPlayer() {
+    const layer = document.getElementById('characters-layer');
+    let myEl = document.getElementById('my-player');
+
+    if (!myEl) {
+      myEl = document.createElement('div');
+      myEl.className = 'character player';
+      myEl.id = 'my-player';
+      layer.appendChild(myEl);
+    }
+
+    myEl.style.left = myPlayer.x + '%';
+    myEl.style.top = myPlayer.y + '%';
+    myEl.style.zIndex = Math.floor(myPlayer.y);
+    myEl.innerHTML = `
+      <div class="speech-bubble">${escapeHtml(myPlayer.message)}</div>
+      <div class="avatar-sprite">${myPlayer.avatar}</div>
+      <div class="name-tag">⭐ ${escapeHtml(myPlayer.name)}</div>
+    `;
+  }
+
+  // 터치/클릭 이동
+  const hallEl = document.getElementById('wedding-hall');
+  hallEl.addEventListener('click', (e) => {
+    if (e.target.closest('.npc') || e.target.closest('#door-overlay')) return;
+    const rect = hallEl.getBoundingClientRect();
+    const clickX = Math.max(10, Math.min(90, ((e.clientX - rect.left) / rect.width) * 100));
+    const clickY = Math.max(22, Math.min(84, ((e.clientY - rect.top) / rect.height) * 100));
+    
+    myPlayer.x = clickX;
+    myPlayer.y = clickY;
+    renderMyPlayer();
+  });
+
+  // 신랑·신부 NPC 터치 -> 모바일 청첩장 링크 오픈
+  function goToInvitation(e) {
+    if (e) e.stopPropagation();
+    if (weddingConfig.invitation) {
+      window.open(weddingConfig.invitation, '_blank');
+    } else {
+      alert("등록된 모바일 청첩장 링크가 없습니다.");
+    }
+  }
+
+  // 촬영기사 NPC 터치 -> 공유 구글 드라이브 열기
+  function openSharedDriveFolder() {
+    if (weddingConfig.drive) {
+      window.open(weddingConfig.drive, '_blank');
+    } else {
+      alert("등록된 공유 구글 드라이브 링크가 없습니다.");
+    }
+  }
+
+  // 📸 현재 식장 캡처 -> 내 디바이스로 방명록 이미지 다운로드
+  async function captureAndDownloadGuestbook() {
+    const hallEl = document.getElementById('wedding-hall');
+    
+    try {
+      const canvas = await html2canvas(hallEl, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#fdfbf7"
+      });
+
+      const dataUrl = canvas.toDataURL("image/png");
+      const fileName = `[방명록스냅]_${myPlayer.name}_${Date.now()}.png`;
+
+      const link = document.createElement('a');
+      link.download = fileName;
+      link.href = dataUrl;
+      link.click();
+      alert("🎉 방명록 캡처 이미지가 내 기기에 다운로드되었습니다!");
+    } catch (err) {
+      alert("캡처 중 오류 발생: " + err.toString());
+    }
+  }
+
+  function openModal(id, e) { if (e) e.stopPropagation(); document.getElementById(id).classList.add('active'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+  function copyText(t) { navigator.clipboard.writeText(t).then(() => alert("복사되었습니다:
+" + t)); }
+  function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+</script>
+</body>
+</html>
